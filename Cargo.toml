@@ -1,0 +1,17 @@
+[package]
+name = "sophon-wasm"
+version = "0.15.31"
+authors = ["Nikolay Volf <nikvolf@gmail.com>", "Svyatoslav Nikolsky <svyatonik@yandex.ru>"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/super-string/sophon-wasm"
+homepage = "https://github.com/super-string/sophon-wasm"
+documentation = "https://super-string.github.io/sophon-wasm/sophon_wasm/"
+description = "WebAssembly binary format serialization/deserialization/interpreter"
+keywords = ["wasm", "webassembly", "bytecode", "serde", "interpreter"]
+exclude = [ "res/*", "spec/*" ]
+
+[dependencies]
+log = "0.3"
+byteorder = "1.0"
+parking_lot = "0.4"
