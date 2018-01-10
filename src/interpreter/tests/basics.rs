@@ -1,18 +1,18 @@
 ///! Basic tests for instructions/constructions, missing in wabt tests
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use builder::module;
 use elements::{ExportEntry, Internal, ImportEntry, External, GlobalEntry, GlobalType,
-	InitExpr, ValueType, BlockType, Opcodes, Opcode, FunctionType, TableType, MemoryType};
-use interpreter::{Error, UserError, ProgramInstance, DefaultProgramInstance, DefaultModuleInstance};
-use interpreter::env_native::{env_native_module, UserDefinedElements, UserFunctionExecutor, UserFunctionDescriptor};
+	InitExpr, ValueType, Opcodes, Opcode, FunctionType, TableType, MemoryType};
+use interpreter::{Error, UserError, ProgramInstance};
+use interpreter::native::{native_module, UserDefinedElements, UserFunctionExecutor, UserFunctionDescriptor};
 use interpreter::memory::MemoryInstance;
 use interpreter::module::{ModuleInstanceInterface, CallerContext, ItemIndex, ExecutionParams, ExportEntryType, FunctionSignature};
-use interpreter::validator::{FunctionValidationContext, Validator};
 use interpreter::value::{RuntimeValue, TryInto};
 use interpreter::variable::{VariableInstance, ExternalVariableValue, VariableType};
+use super::utils::program_with_default_env;
 
 #[test]
 fn import_function() {
@@ -40,7 +40,7 @@ fn import_function() {
 			.build()
 		.build();
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	let external_module = program.add_module("external_module", module1, None).unwrap();
 	let main_module = program.add_module("main", module2, None).unwrap();
 
@@ -74,15 +74,15 @@ fn wrong_import() {
 			.build()
 		.build();
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	let _side_module_instance = program.add_module("side_module", side_module, None).unwrap();
-	assert!(program.add_module("main", module, None).is_err());	
+	assert!(program.add_module("main", module, None).is_err());
 }
 
 #[test]
 fn global_get_set() {
 	let module = module()
-		.with_global(GlobalEntry::new(GlobalType::new(ValueType::I32, true), InitExpr::new(vec![Opcode::I32Const(42)])))
+		.with_global(GlobalEntry::new(GlobalType::new(ValueType::I32, true), InitExpr::new(vec![Opcode::I32Const(42), Opcode::End])))
 		.function()
 			.signature().return_type().i32().build()
 			.body().with_opcodes(Opcodes::new(vec![
@@ -96,7 +96,7 @@ fn global_get_set() {
 			.build()
 		.build();
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	let module = program.add_module("main", module, None).unwrap();
 	assert_eq!(module.execute_index(0, vec![].into()).unwrap().unwrap(), RuntimeValue::I32(50));
 	assert_eq!(module.execute_index(0, vec![].into()).unwrap().unwrap(), RuntimeValue::I32(58));
@@ -129,12 +129,12 @@ struct MeasuredVariable {
 	pub val: i32,
 }
 
-impl ExternalVariableValue<UserErrorWithCode> for MeasuredVariable {
+impl ExternalVariableValue for MeasuredVariable {
 	fn get(&self) -> RuntimeValue {
 		RuntimeValue::I32(self.val)
 	}
 
-	fn set(&mut self, val: RuntimeValue) -> Result<(), Error<UserErrorWithCode>> {
+	fn set(&mut self, val: RuntimeValue) -> Result<(), Error> {
 		self.val = val.try_into()?;
 		Ok(())
 	}
@@ -156,12 +156,12 @@ impl UserError for UserErrorWithCode {}
 
 // user function executor
 struct FunctionExecutor {
-	pub memory: Arc<MemoryInstance<UserErrorWithCode>>,
+	pub memory: Arc<MemoryInstance>,
 	pub values: Vec<i32>,
 }
 
-impl UserFunctionExecutor<UserErrorWithCode> for FunctionExecutor {
-	fn execute(&mut self, name: &str, context: CallerContext<UserErrorWithCode>) -> Result<Option<RuntimeValue>, Error<UserErrorWithCode>> {
+impl<'a> UserFunctionExecutor for &'a mut FunctionExecutor {
+	fn execute(&mut self, name: &str, context: CallerContext) -> Result<Option<RuntimeValue>, Error> {
 		match name {
 			"add" => {
 				let memory_value = self.memory.get(0, 1).unwrap()[0];
@@ -186,7 +186,7 @@ impl UserFunctionExecutor<UserErrorWithCode> for FunctionExecutor {
 				Ok(Some(RuntimeValue::I32(diff as i32)))
 			},
 			"err" => {
-				Err(Error::User(UserErrorWithCode { error_code: 777 }))
+				Err(Error::User(Box::new(UserErrorWithCode { error_code: 777 })))
 			},
 			_ => Err(Error::Trap("not implemented".into()).into()),
 		}
@@ -196,7 +196,7 @@ impl UserFunctionExecutor<UserErrorWithCode> for FunctionExecutor {
 #[test]
 fn native_env_function() {
 	// create new program
-	let program = ProgramInstance::new().unwrap();
+	let program = program_with_default_env();
 	// => env module is created
 	let env_instance = program.module("env").unwrap();
 	// => linear memory is created
@@ -213,7 +213,7 @@ fn native_env_function() {
 			globals: HashMap::new(),
 			functions: ::std::borrow::Cow::from(SIGNATURES),
 		};
-		let native_env_instance = Arc::new(env_native_module(env_instance, functions).unwrap());
+		let native_env_instance = native_module(env_instance, functions).unwrap();
 		let params = ExecutionParams::with_external("env".into(), native_env_instance);
 
 		let module = module()
@@ -256,17 +256,17 @@ fn native_env_function() {
 #[test]
 fn native_env_function_own_memory() {
 	// create program + env module is auto instantiated + env module memory is instantiated (we do not need this)
-	let program = ProgramInstance::new().unwrap();
+	let program = program_with_default_env();
 
 	struct OwnMemoryReference {
-		pub memory: RefCell<Option<Arc<MemoryInstance<UserErrorWithCode>>>>,
+		pub memory: RefCell<Option<Arc<MemoryInstance>>>,
 	}
 	struct OwnMemoryExecutor {
 		pub memory_ref: Arc<OwnMemoryReference>,
 	}
 
-	impl UserFunctionExecutor<UserErrorWithCode> for OwnMemoryExecutor {
-		fn execute(&mut self, name: &str, context: CallerContext<UserErrorWithCode>) -> Result<Option<RuntimeValue>, Error<UserErrorWithCode>> {
+	impl<'a> UserFunctionExecutor for &'a mut OwnMemoryExecutor {
+		fn execute(&mut self, name: &str, context: CallerContext) -> Result<Option<RuntimeValue>, Error> {
 			match name {
 				"add" => {
 					let memory = self.memory_ref.memory.borrow_mut().as_ref().expect("initialized before execution; qed").clone();
@@ -287,11 +287,11 @@ fn native_env_function_own_memory() {
 	let env_instance = program.module("env").unwrap();
 	let memory_ref = Arc::new(OwnMemoryReference { memory: RefCell::new(None) });
 	let mut executor = OwnMemoryExecutor { memory_ref: memory_ref.clone() };
-	let native_env_instance = Arc::new(env_native_module(env_instance, UserDefinedElements {
+	let native_env_instance = native_module(env_instance, UserDefinedElements {
 		executor: Some(&mut executor),
 		globals: HashMap::new(),
 		functions: ::std::borrow::Cow::from(SIGNATURES),
-	}).unwrap());
+	}).unwrap();
 	let params = ExecutionParams::with_external("env".into(), native_env_instance);
 
 	// create module definition with its own memory
@@ -314,7 +314,7 @@ fn native_env_function_own_memory() {
 	let module_instance = program.add_module("main", module, Some(&params.externals)).unwrap();
 	// now get memory reference
 	let module_memory = module_instance.memory(ItemIndex::Internal(0)).unwrap();
-	// post-initialize our executor with memory reference 
+	// post-initialize our executor with memory reference
 	*memory_ref.memory.borrow_mut() = Some(module_memory);
 
 	// now execute function => executor updates memory
@@ -324,11 +324,19 @@ fn native_env_function_own_memory() {
 
 #[test]
 fn native_env_global() {
-	// module constructor
-	let module_constructor = |elements| {
-		let program = ProgramInstance::new().unwrap();
+	struct DummyExecutor;
+	impl UserFunctionExecutor for DummyExecutor {
+		fn execute(&mut self, _name: &str, _context: CallerContext) -> Result<Option<RuntimeValue>, Error> {
+			// this code should be unreachable, because we actually doesn't call any
+			// native functions in this test.
+			unreachable!();
+		}
+	}
+
+	let module_constructor = |elements: UserDefinedElements<DummyExecutor>| {
+		let program = program_with_default_env();
 		let env_instance = program.module("env").unwrap();
-		let native_env_instance = Arc::new(env_native_module(env_instance.clone(), elements).unwrap());
+		let native_env_instance = native_module(env_instance, elements).unwrap();
 		let params = ExecutionParams::with_external("env".into(), native_env_instance);
 
 		let module = module()
@@ -375,16 +383,17 @@ fn native_env_global() {
 
 #[test]
 fn native_custom_error() {
-	let program = ProgramInstance::new().unwrap();
+	let program = program_with_default_env();
 	let env_instance = program.module("env").unwrap();
 	let env_memory = env_instance.memory(ItemIndex::Internal(0)).unwrap();
+
 	let mut executor = FunctionExecutor { memory: env_memory.clone(), values: Vec::new() };
 	let functions = UserDefinedElements {
 		executor: Some(&mut executor),
 		globals: HashMap::new(),
 		functions: ::std::borrow::Cow::from(SIGNATURES),
 	};
-	let native_env_instance = Arc::new(env_native_module(env_instance, functions).unwrap());
+	let native_env_instance = native_module(env_instance, functions).unwrap();
 	let params = ExecutionParams::with_external("env".into(), native_env_instance);
 
 	let module = module()
@@ -401,60 +410,65 @@ fn native_custom_error() {
 		.build();
 
 	let module_instance = program.add_module("main", module, Some(&params.externals)).unwrap();
-	assert_eq!(module_instance.execute_index(0, params.clone().add_argument(RuntimeValue::I32(7)).add_argument(RuntimeValue::I32(0))),
-		Err(Error::User(UserErrorWithCode { error_code: 777 })));
-	assert_eq!(module_instance.execute_index(1, params.clone().add_argument(RuntimeValue::I32(7)).add_argument(RuntimeValue::I32(0))),
-		Err(Error::User(UserErrorWithCode { error_code: 777 })));
-}
+	let user_error1 = match module_instance.execute_index(
+		0,
+		params
+			.clone()
+			.add_argument(RuntimeValue::I32(7))
+			.add_argument(RuntimeValue::I32(0)),
+	) {
+		Err(Error::User(user_error)) => user_error,
+		result => panic!("Unexpected result {:?}", result),
+	};
+	assert_eq!(user_error1.downcast_ref::<UserErrorWithCode>().unwrap(), &UserErrorWithCode { error_code: 777 });
 
-#[test]
-fn import_env_mutable_global() {
-	let program = DefaultProgramInstance::new().unwrap();
-
-	let module = module()
-		.with_import(ImportEntry::new("env".into(), "STACKTOP".into(), External::Global(GlobalType::new(ValueType::I32, false))))
-		.build();
-
-	program.add_module("main", module, None).unwrap();
+	let user_error2 = match module_instance.execute_index(
+		0,
+		params
+			.clone()
+			.add_argument(RuntimeValue::I32(7))
+			.add_argument(RuntimeValue::I32(0)),
+	) {
+		Err(Error::User(user_error)) => user_error,
+		result => panic!("Unexpected result {:?}", result),
+	};
+	assert_eq!(user_error2.downcast_ref::<UserErrorWithCode>().unwrap(), &UserErrorWithCode { error_code: 777 });
 }
 
 #[test]
 fn env_native_export_entry_type_check() {
-	let program = ProgramInstance::new().unwrap();
+	let program = program_with_default_env();
+	let env_instance = program.module("env").unwrap();
+	let env_memory = env_instance.memory(ItemIndex::Internal(0)).unwrap();
 	let mut function_executor = FunctionExecutor {
-		memory: program.module("env").unwrap().memory(ItemIndex::Internal(0)).unwrap(),
+		memory: env_memory,
 		values: Vec::new(),
 	};
-	let native_env_instance = Arc::new(env_native_module(program.module("env").unwrap(), UserDefinedElements {
+	let native_env_instance = native_module(env_instance, UserDefinedElements {
 		executor: Some(&mut function_executor),
-		globals: HashMap::new(),
+		globals: vec![("ext_global".into(), Arc::new(VariableInstance::new(false, VariableType::I32, RuntimeValue::I32(1312)).unwrap()))].into_iter().collect(),
 		functions: ::std::borrow::Cow::from(SIGNATURES),
-	}).unwrap());
+	}).unwrap();
 
 	assert!(native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![ValueType::I32, ValueType::I32], Some(ValueType::I32))))).is_ok());
-	assert!(native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![], Some(ValueType::I32))))).is_err());
-	assert!(native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![ValueType::I32, ValueType::I32], None)))).is_err());
-	assert!(native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![ValueType::I32, ValueType::I32], Some(ValueType::I64))))).is_err());
-}
+	match native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![], Some(ValueType::I32))))) {
+		Err(Error::Validation(_)) => { },
+		result => panic!("Unexpected result {:?}", result),
+	}
+	match native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![ValueType::I32, ValueType::I32], None)))) {
+		Err(Error::Validation(_)) => { },
+		result => panic!("Unexpected result {:?}", result),
+	}
+	match native_env_instance.export_entry("add", &ExportEntryType::Function(FunctionSignature::Module(&FunctionType::new(vec![ValueType::I32, ValueType::I32], Some(ValueType::I64))))) {
+		Err(Error::Validation(_)) => { },
+		result => panic!("Unexpected result {:?}", result),
+	}
 
-#[test]
-fn if_else_with_return_type_validation() {
-	let module_instance = DefaultModuleInstance::new(Weak::default(), "test".into(), module().build()).unwrap();
-	let mut context = FunctionValidationContext::new(&module_instance, None, &[], 1024, 1024, FunctionSignature::Module(&FunctionType::default()));
-
-	Validator::validate_function(&mut context, BlockType::NoResult, &[
-		Opcode::I32Const(1),
-		Opcode::If(BlockType::NoResult),
-			Opcode::I32Const(1),
-			Opcode::If(BlockType::Value(ValueType::I32)),
-				Opcode::I32Const(1),
-			Opcode::Else,
-				Opcode::I32Const(2),
-			Opcode::End,
-		Opcode::Drop,
-		Opcode::End,
-		Opcode::End,
-	]).unwrap();
+	assert!(native_env_instance.export_entry("ext_global", &ExportEntryType::Global(VariableType::I32)).is_ok());
+	match native_env_instance.export_entry("ext_global", &ExportEntryType::Global(VariableType::F32)) {
+		Err(Error::Validation(_)) => { },
+		result => panic!("Unexpected result {:?}", result),
+	}
 }
 
 #[test]
@@ -464,7 +478,7 @@ fn memory_import_limits_initial() {
 		.with_export(ExportEntry::new("memory".into(), Internal::Memory(0)))
 		.build();
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	program.add_module("core", core_module, None).unwrap();
 
 	let test_cases = vec![
@@ -501,7 +515,7 @@ fn memory_import_limits_maximum() {
 		(None, None, MaximumError::Ok),
 	];
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	for test_case in test_cases {
 		let (core_maximum, client_maximum, expected_err) = test_case;
 		let core_module = module()
@@ -532,7 +546,7 @@ fn table_import_limits_initial() {
 		.with_export(ExportEntry::new("table".into(), Internal::Table(0)))
 		.build();
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	program.add_module("core", core_module, None).unwrap();
 
 	let test_cases = vec![
@@ -569,7 +583,7 @@ fn table_import_limits_maximum() {
 		(None, None, MaximumError::Ok),
 	];
 
-	let program = DefaultProgramInstance::new().unwrap();
+	let program = ProgramInstance::new();
 	for test_case in test_cases {
 		let (core_maximum, client_maximum, expected_err) = test_case;
 		let core_module = module()

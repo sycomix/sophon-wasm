@@ -4,7 +4,7 @@ extern crate sophon_wasm;
 
 use std::env::args;
 
-use sophon_wasm::{interpreter, ModuleInstanceInterface};
+use sophon_wasm::ModuleInstanceInterface;
 
 fn main() {
     let args: Vec<_> = args().collect();
@@ -15,14 +15,7 @@ fn main() {
     }
 
     // Intrepreter initialization.
-    // sophon_wasm::DefaultProgramInstance parametrize ProgramInstance with a pre-defined "DummyUserError"
-    // Initializes a default "env" module also.
-    let program = sophon_wasm::DefaultProgramInstance::with_env_params(
-        interpreter::EnvParams {
-            total_stack: 128*1024,
-            ..Default::default()
-        }
-    ).expect("Failed to load program");
+    let program = sophon_wasm::ProgramInstance::new();
 
     // Here we load module using dedicated for this purpose
     // `deserialize_file` function (which works only with modules)

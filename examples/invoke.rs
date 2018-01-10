@@ -16,14 +16,7 @@ fn main() {
     let (_, program_args) = args.split_at(3);
 
     // Intrepreter initialization.
-    // sophon_wasm::DefaultProgramInstance parametrize ProgramInstance with a pre-defined "DummyUserError"
-    // Initializes a default "env" module also.
-    let program = sophon_wasm::DefaultProgramInstance::with_env_params(
-        interpreter::EnvParams {
-            total_stack: 128*1024,
-            ..Default::default()
-        }
-    ).expect("Program instance to load");
+    let program = sophon_wasm::ProgramInstance::new();
 
     let module = sophon_wasm::deserialize_file(&args[1]).expect("File to be deserialized");
 

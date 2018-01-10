@@ -10,6 +10,8 @@ extern crate parking_lot;
 pub mod elements;
 pub mod builder;
 pub mod interpreter;
+mod validation;
+mod common;
 
 pub use elements::{
     Error as SerializationError,
@@ -22,10 +24,7 @@ pub use elements::{
 
 pub use interpreter::{
     ProgramInstance,
-    DefaultProgramInstance,
     ModuleInstance,
-    DefaultModuleInstance,
     ModuleInstanceInterface,
-    DefaultModuleInstanceInterface,
     RuntimeValue,
 };

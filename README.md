@@ -3,7 +3,7 @@
 [![Build Status](https://travis-ci.org/super-string/sophon-wasm.svg?branch=master)](https://travis-ci.org/super-string/sophon-wasm)
 [![crates.io link](https://img.shields.io/crates/v/sophon-wasm.svg)](https://crates.io/crates/sophon-wasm)
 
-[Documentation](https://nikvolf.github.io/sophon-wasm/sophon_wasm/)
+[Documentation](https://super-string.github.io/sophon-wasm/sophon_wasm/)
 
 ## Rust WebAssembly format serializing/deserializing
 
